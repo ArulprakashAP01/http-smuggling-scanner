@@ -1,6 +1,5 @@
 # Arul HTTP Smuggling Hunter 🚀
 
-[![GitHub Release](https://img.shields.io/github/v/release/ArulprakashAP01/http-smuggling-scanner?color=green)](https://github.com/ArulprakashAP01/http-smuggling-scanner/releases)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
