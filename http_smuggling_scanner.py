@@ -92,30 +92,16 @@ PAYLOADS = [
 
 green = '\033[92m'
 reset = '\033[0m'
+BANNER = f"""{green}.────────────────────────────────────────────────────────.
+|  Tool    : Automated HTTP Request Smuggling Scanner 👾                   
+|  Author  : @ArulPrakash 🎖️
+|  Codename: Arul Hunter 3
+'────────────────────────────────────────────────────────'
 
-BANNER = (
-    green +
-    "╔════════════════════════════════════════════════════════════════════════════════════╗\n"
-    "║                                                                                  ║\n"
-    "║                                 .----.                                           ║\n"
-    "║                                / .--. \\                                          ║\n"
-    "║                               / /    \\ \\                                         ║\n"
-    "║                               | |     | |                                         ║\n"
-    "║                               | |.-\"\" | |                                       ║\n"
-    "║                              ///`.::::. \\                                       ║\n"
-    "║                             ||| ::/  \\:: ;                                      ║\n"
-    "║                             ||; ::\\__/:: ;                                      ║\n"
-    "║                              \\\\ '::::' /                                       ║\n"
-    "║                               `=':-..-'`                                         ║\n"
-    "║                                                                                  ║\n"
-    "║                                ARUL HUNTER 3                                     ║\n"
-    "║                                                                                  ║\n"
-    "║                Automated HTTP Request Smuggling Scanner                          ║\n"
-    "║                                                                                  ║\n"
-    "╚════════════════════════════════════════════════════════════════════════════════════╝" + reset +
-    "\n\033[92m\033[1mInstagram: \033]8;;https://www.instagram.com/a_r_u_l._._?igsh=Mm95NzRsNjV5NHph\033\\@a_r_u_l._._\033]8;;\033\\   GitHub: \033]8;;https://github.com/ArulprakashAP01\033\\@ArulprakashAP01\033]8;;\033\\\033[0m\n"
-)
-
+                  ^   (\\_/)
+                  '---(O.o)  
+                      (> <)   [Ready to Hunt!]{reset}"""
+print("\n" * 2)
 # Helper to print request/response side by side
 def print_repeater_style(request, response, status, payload_desc, vulnerable=False, reason=None):
     req_lines = request.split('\n')
@@ -178,49 +164,171 @@ def get_baseline_response(url, method):
 
 def is_meaningful_diff(baseline, resp, elapsed):
     reasons = []
+    
+    # Only flag significant status code changes (not common errors)
     if resp.status_code != baseline['status']:
-        reasons.append(f"Status {resp.status_code} != baseline {baseline['status']}")
-    if abs(elapsed - baseline['elapsed']) > 3:
-        reasons.append(f"Timing diff ({elapsed:.2f}s vs {baseline['elapsed']:.2f}s)")
-    # Compare headers (ignore some volatile ones)
+        # Don't flag 400 as vulnerable unless baseline was 200
+        if baseline['status'] == 200 and resp.status_code in [502, 503, 504]:
+            reasons.append(f"Status changed from {baseline['status']} to {resp.status_code}")
+    
+    # Significant timing differences (more than 5 seconds)
+    if abs(elapsed - baseline['elapsed']) > 5:
+        reasons.append(f"Significant timing diff ({elapsed:.2f}s vs {baseline['elapsed']:.2f}s)")
+    
+    # Compare headers for smuggling indicators
     ignore_headers = {'date', 'set-cookie', 'expires', 'content-length', 'server'}
     for k, v in resp.headers.items():
         if k.lower() not in ignore_headers and baseline['headers'].get(k) != v:
-            reasons.append(f"Header {k}: {v} != baseline {baseline['headers'].get(k)}")
-    # Compare body (simple diff)
-    if resp.text[:100] != baseline['body'][:100]:
-        reasons.append("Body differs from baseline")
+            # Only flag if it's a significant header change
+            if k.lower() in ['transfer-encoding', 'content-encoding']:
+                reasons.append(f"Critical header change {k}: {v} != baseline {baseline['headers'].get(k)}")
+    
+    # Look for specific smuggling indicators in response body
+    response_lower = resp.text.lower()
+    baseline_lower = baseline['body'].lower()
+    
+    # Only flag if response contains specific smuggling error messages
+    smuggling_indicators = [
+        'invalid chunk size',
+        'chunk encoding error', 
+        'transfer encoding error',
+        'malformed chunk',
+        'request entity too large',
+        'bad chunk encoding'
+    ]
+    
+    for indicator in smuggling_indicators:
+        if indicator in response_lower and indicator not in baseline_lower:
+            reasons.append(f"Smuggling indicator found: {indicator}")
+    
     return reasons
 
 def send_with_curl(url, headers, body):
     parsed = urlparse(url)
     curl_cmd = [
         'curl', '-i', '--raw', '-s', '-X', 'POST', url,
-        '--max-time', '10', '--connect-timeout', '10',
+        '--max-time', '15', '--connect-timeout', '10',
+        '--http1.1', '--no-buffer'
     ]
     for k, v in headers:
         curl_cmd += ['-H', f'{k}: {v}']
     curl_cmd += ['--data-binary', body]
+    
     try:
-        result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=15)
-        return result.stdout, ' '.join(curl_cmd)
+        print(f"\033[93m[CURL COMMAND]\033[0m {' '.join(curl_cmd)}")
+        result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=20)
+        
+        if result.returncode != 0:
+            error_msg = f'[CURL ERROR] Return code: {result.returncode}'
+            if result.stderr:
+                error_msg += f', Error: {result.stderr.strip()}'
+            return error_msg, ' '.join(curl_cmd)
+        
+        response_text = result.stdout
+        if not response_text.strip():
+            response_text = '[EMPTY RESPONSE]'
+            if result.stderr:
+                response_text += f'\n[STDERR]: {result.stderr.strip()}'
+        
+        return response_text, ' '.join(curl_cmd)
+        
+    except subprocess.TimeoutExpired:
+        return '[ERROR] curl command timed out (20s)', ' '.join(curl_cmd)
     except Exception as e:
-        return f'[ERROR] curl failed: {e}', ' '.join(curl_cmd)
+        return f'[ERROR] curl failed: {str(e)}', ' '.join(curl_cmd)
+
+def parse_curl_response(response_text, baseline_status=None):
+    """Parse curl response with more accurate vulnerability detection"""
+    status = 'N/A'
+    vulnerable = False
+    reasons = []
+    
+    if '[ERROR]' in response_text or '[CURL ERROR]' in response_text:
+        # Only flag connection errors if they're unusual
+        if 'timed out' in response_text:
+            vulnerable = True
+            reasons.append("Request timeout (possible desync)")
+        return status, vulnerable, reasons
+    
+    lines = response_text.splitlines()
+    
+    # Extract status code
+    for line in lines:
+        if line.startswith('HTTP/'):
+            try:
+                status = line.split()[1]
+                status_code = int(status)
+                
+                # More specific vulnerability detection
+                if baseline_status:
+                    # Only flag if status changed from 200 to server error
+                    if baseline_status == 200 and status_code in [502, 503, 504]:
+                        vulnerable = True
+                        reasons.append(f"Status changed from {baseline_status} to {status_code}")
+                else:
+                    # Without baseline, only flag severe server errors
+                    if status_code in [502, 503, 504]:
+                        vulnerable = True
+                        reasons.append(f"Server error: {status_code}")
+                break
+            except (IndexError, ValueError):
+                status = 'PARSE_ERROR'
+    
+    # Check for specific smuggling error messages (not generic 400 errors)
+    response_lower = response_text.lower()
+    specific_smuggling_errors = [
+        'invalid chunk size',
+        'chunk encoding error',
+        'transfer encoding error', 
+        'malformed chunk',
+        'bad chunk encoding',
+        'request entity too large and chunked',
+        'chunked encoding not allowed'
+    ]
+    
+    for error in specific_smuggling_errors:
+        if error in response_lower:
+            vulnerable = True
+            reasons.append(f"Specific smuggling error: {error}")
+    
+    # Check for desync indicators (multiple responses, unexpected content)
+    if response_text.count('HTTP/') > 1:
+        vulnerable = True
+        reasons.append("Multiple HTTP responses detected (possible desync)")
+    
+    # Check for extremely short responses (connection drops)
+    if len(response_text.strip()) < 20 and '[ERROR]' not in response_text:
+        vulnerable = True
+        reasons.append("Extremely short response (possible connection drop)")
+    
+    return status, vulnerable, reasons
 
 # Send smuggling payloads and print repeater-style logs
 def scan_url(url, use_curl=False):
     print(f"\033[95m[~] Scanning: {url}\033[0m")
     findings = []
+    
+    # Get baseline first
+    baseline_status = None
+    if use_curl:
+        try:
+            baseline_resp = requests.get(url, timeout=10)
+            baseline_status = baseline_resp.status_code
+        except:
+            baseline_status = None
+    
     for method in ['POST', 'GET']:
         print(f"\033[96m[~] Using {method} method\033[0m")
         print("\033[94m[~] Payloads to be tried:\033[0m")
         for payload in PAYLOADS:
             print(f"   \033[92m[*]\033[0m \033[1m{payload['desc']}\033[0m")
         print("\033[96m" + "="*60 + "\033[0m")
+        
         baseline = get_baseline_response(url, method) if not use_curl else None
         if not baseline and not use_curl:
             print(f"\033[91m[ERROR] Could not get baseline response for {method}. Skipping this method.\033[0m")
             continue
+            
         for payload in PAYLOADS:
             headers = {k: v for k, v in payload['headers']}
             try:
@@ -228,17 +336,22 @@ def scan_url(url, use_curl=False):
                 if use_curl:
                     print(f"\033[93m[>]\033[0m \033[1mTrying payload:\033[0m \033[92m{payload['desc']}\033[0m \033[90m({method})\033[0m")
                     resp_text, curl_cmd = send_with_curl(url, payload['headers'], payload['body'])
-                    print(f"\033[93m[CURL COMMAND]\033[0m {curl_cmd}")
-                    status = 'N/A'
-                    lines = resp_text.splitlines()
-                    if lines and lines[0].startswith('HTTP/'):
-                        try:
-                            status = lines[0].split()[1]
-                        except Exception:
-                            status = 'N/A'
-                    print_repeater_style(raw_req, resp_text, status, f"{payload['desc']} [{method}]", vulnerable=False)
+                    
+                    # Parse response with baseline
+                    status, vulnerable, reasons = parse_curl_response(resp_text, baseline_status)
+                    reason_str = ', '.join(reasons) if reasons else None
+                    
+                    print_repeater_style(raw_req, resp_text, status, f"{payload['desc']} [{method}]", vulnerable=vulnerable, reason=reason_str)
+                    
+                    if vulnerable:
+                        print(f"\033[91m[!!] POTENTIAL VULNERABILITY DETECTED: {reason_str}\033[0m")
+                        findings.append((f"{payload['desc']} [{method}]", url, status, 0, reason_str))
+                    else:
+                        print(f"\033[92m[OK] No vulnerability detected\033[0m")
+                    
                     print("\033[90m" + "-"*60 + "\033[0m")
                     continue
+                
                 # Send using requests
                 start = time.time()
                 if method == 'POST':
@@ -246,23 +359,26 @@ def scan_url(url, use_curl=False):
                 else:
                     resp = requests.get(url, headers=headers, params={'payload': payload['body']}, timeout=10, allow_redirects=False)
                 elapsed = time.time() - start
-                # Detection: baseline diff + anomaly
+                
+                # More accurate detection
                 diff_reasons = is_meaningful_diff(baseline, resp, elapsed)
-                anomaly = False
-                reason = []
-                if diff_reasons:
+                anomaly = len(diff_reasons) > 0
+                
+                # Additional checks for severe timing anomalies
+                if elapsed > 10:  # Very slow response
+                    diff_reasons.append(f"Very slow response ({elapsed:.2f}s)")
                     anomaly = True
-                    reason.extend(diff_reasons)
-                if resp.status_code in (400, 404, 408, 413, 414, 500, 501, 502, 503, 504):
-                    anomaly = True
-                    reason.append(f"Status {resp.status_code}")
-                if 'chunk' in resp.text.lower() or 'malformed' in resp.text.lower() or 'error' in resp.text.lower():
-                    anomaly = True
-                    reason.append("Chunk/Error in response")
-                if elapsed > 5:
-                    anomaly = True
-                    reason.append(f"Slow ({elapsed:.2f}s)")
-                reason_str = ', '.join(reason) if reason else None
+                
+                reason_str = ', '.join(diff_reasons) if diff_reasons else None
+                
+                # Build response text for display
+                resp_text = f"HTTP/1.1 {resp.status_code} {resp.reason}\n"
+                for k, v in resp.headers.items():
+                    resp_text += f"{k}: {v}\n"
+                resp_text += "\n" + resp.text[:500]
+                
+                print_repeater_style(raw_req, resp_text, resp.status_code, f"{payload['desc']} [{method}]", vulnerable=anomaly, reason=reason_str)
+                
                 if anomaly:
                     print(f"\033[91m[!!] VULNERABLE: {payload['desc']} [{method}] | {url} | Reason: {reason_str}\033[0m")
                     findings.append((f"{payload['desc']} [{method}]", url, resp.status_code, elapsed, reason_str))
@@ -315,7 +431,8 @@ def discover_endpoints(base_url):
 # Interactive CLI
 def main():
     print(BANNER)
-    print("\033[1mInstagram: \033]8;;https://www.instagram.com/a_r_u_l._._?igsh=Mm95NzRsNjV5NHph\033\\@a_r_u_l._._\033]8;;\033\\   GitHub: \033]8;;https://github.com/ArulprakashAP01\033\\@ArulprakashAP01\033]8;;\033\\\033[0m")
+    print("\033[1mInstagram: \033]8;;https://www.instagram.com/a_r_u_l._._?igsh=Mm95NzRsNjV5NHph\033\\@a_r_u_l._._\033]8;;\033\\   GitHub: \033]8;;https://github.com/ArulprakashAP01\033\\@ArulPrakashAP01\033]8;;\033\\\033[0m")
+    print("\n" * 2)
     print("\033[1mWelcome to Arul HTTP Smuggling Hunter!\033[0m\n")
     print("Choose scan mode:")
     print("  1) Single URL")
@@ -365,4 +482,4 @@ def main():
             print(f"\033[91m{desc:<30} | {url:<40} | {status:<6} | {elapsed:<6.2f} | {reason}\033[0m")
 
 if __name__ == "__main__":
-    main() 
+    main()
