@@ -37,8 +37,8 @@ Designed for **penetration testers, bug bounty hunters, and security researchers
 ---
 
 ## 📸 Demo (CLI Preview)
+<img width="957" height="416" alt="image" src="https://github.com/user-attachments/assets/f3c47fed-664d-436f-84d5-89e5a92c35f5" />
 
-![CLI Demo](<img width="957" height="416" alt="image" src="https://github.com/user-attachments/assets/074cba46-4823-4bca-a8d3-d25a224cb3d2"/>)
 
 ---
 
