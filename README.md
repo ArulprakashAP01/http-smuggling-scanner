@@ -27,6 +27,7 @@ This tool is designed for **penetration testers, bug bounty hunters, and securit
 
 ## 📸 Demo (CLI Preview)
 
-<img width="627" height="404" alt="image" src="https://github.com/user-attachments/assets/e1a4af9e-0a13-464a-8a09-f60e1588c492" />
 
+
+<img width="1052" height="473" alt="image" src="https://github.com/user-attachments/assets/8774b092-7e55-4ed2-8f7c-f20dc28c2ec3" />
 
